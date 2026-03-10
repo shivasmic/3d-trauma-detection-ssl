@@ -1,0 +1,125 @@
+# Dataset
+dataset:
+  name: "rsna_trauma"
+  data_dir: "path to preprocessed data"
+  num_classes: 2
+  volume_shape: [512, 336, 336]
+  voxel_spacing: [2.0, 1.0, 1.0]
+  physical_dims: [1024.0, 336.0, 336.0]
+  train_ratio: 0.70
+  val_ratio: 0.15
+
+# UNet Encoder
+unet:
+  architecture: "3d_unet"
+  in_channels: 1
+  base_channels: 16
+  depth: 4
+  encoder_channels: 256
+  feature_resolution: [32, 21, 21]
+  pretrained_weights: "path to pretrained 3D Unet Encoder Weights"
+  freeze_encoder: true
+  unfreeze_after_epoch: 20
+  unfreeze_warmup_epochs: 3       
+
+# Feature Adapter
+adapter:
+  transformer_dim: 256
+  use_all_voxels: false
+  max_voxels: 4096
+  sampling_strategy: "random"
+
+# Transformer Decoder
+decoder:
+  num_layers: 6
+  dim: 256
+  num_heads: 4
+  ffn_dim: 1024
+  dropout: 0.1
+  norm: "ln"
+  share_selfattn: false
+  pos_for_key: false
+  rpe_dim: 128
+  rpe_quant: "bilinear_4_10"
+  log_scale: 512.0
+  angle_type: ""
+
+# Queries
+queries:
+  num_queries: 64
+  querypos_mlp: false
+  q_content: "sample"
+
+# Prediction Heads
+heads:
+  mlp_dropout: 0.3
+  mlp_norm: "bn1d"
+  mlp_act: "relu"
+  mlp_sep: true
+  is_bilable: true
+
+# Loss Functions
+loss:
+  cls_loss: "focalloss_0.50"
+  sem_cls_weight: 3.0
+  center_weight: 5.0
+  size_weight: 2.0
+  giou_weight: 2.0
+  matcher_cls_cost: 2.0
+  matcher_center_cost: 5.0
+  matcher_size_cost: 1.0
+  matcher_giou_cost: 2.0
+
+# Optimizer
+optimizer:
+  type: "adamw"
+  base_lr: 0.0001
+  encoder_lr: 0.00001            
+  weight_decay: 0.0001
+  lr_scheduler: "cosine"
+  warm_lr_epochs: 5
+  clip_gradient: 0.1
+
+# Training
+training:
+  max_epoch: 150
+  batchsize_per_gpu: 2
+  dataset_num_workers: 4
+  use_amp: false
+  freeze_unet: true
+  unfreeze_after_epoch: 20
+  unfreeze_warmup_epochs: 3       
+
+# Evaluation
+evaluation:
+  eval_every_epoch: 5
+  ap_iou_thresh: [0.10, 0.25, 0.5, 0.75]
+  conf_thresh: 0.05
+  nms_iou: 0.25
+  use_nms: true
+
+# Hardware
+hardware:
+  ngpus: 1
+  seed: 0
+
+# Logging
+logging:
+  checkpoint_dir: "checkpoints"
+  log_every: 10
+  save_separate_checkpoint_every_epoch: 5
+  wandb_activate: false  
+
+# Semi-Supervised Learning (Mean-Teacher style)
+ssl:
+  enabled: true
+  unlabeled_data_dir: "path to preprocessed volumes for SSL"    
+  unlabeled_batch_size: 2                      
+  consistency_center_weight: 1.0
+  consistency_size_weight: 1.0
+  consistency_cls_weight: 1.0
+  consistency_max_weight: 0.3                 
+  consistency_warmup_epochs: 40                
+  start_epoch: 20
+  temperature: 2.0
+

@@ -1,0 +1,67 @@
+# Dataset
+dataset:
+  name: "rsna_classification_full_3206"
+  data_dir: "path to preprocessed_data"
+  csv_path: "path to train_2024.csv"
+  train_images_dir: "path to train_images folder in RSNA Kaggle dataset"
+  num_classes: 7
+  train_ratio: 0.70  
+  val_ratio: 0.15   
+
+# UNet Encoder
+unet:
+  pretrained_weights: "path to pretrained 3D Unet Encoder Weights"
+  freeze_encoder: true
+  unfreeze_after_epoch: 999
+  unfreeze_warmup_epochs: 3
+
+# Classification Head
+classifier:
+  hidden_dim: 128
+  dropout: 0.5 
+
+# Loss Function
+loss:
+  type: "bce_with_logits"  
+  use_pos_weight: true
+
+# Optimizer
+optimizer:
+  type: "adamw"
+  base_lr: 0.0003      
+  encoder_lr: 0.00003  
+  weight_decay: 0.0005
+  lr_scheduler: "cosine"
+  warm_lr_epochs: 5
+  clip_gradient: 1.0
+
+# Training
+training:
+  max_epoch: 50
+  batchsize_per_gpu: 2  
+  dataset_num_workers: 4
+  eval_every_epoch: 5
+
+# Evaluation
+evaluation:
+  metrics: ["accuracy", "auc", "f1", "precision", "recall"]
+  threshold: 0.5
+
+# Augmentation
+augmentation:
+  enabled: true
+  noise_std: 0.05
+  intensity_shift: 0.15
+  intensity_scale: [0.85, 1.15]
+  gamma_range: [0.8, 1.2]
+
+# Hardware
+hardware:
+  ngpus: 1
+  seed: 42
+
+# Logging
+logging:
+  checkpoint_dir: "checkpoints"
+  log_every: 50 
+  save_best_only: true
