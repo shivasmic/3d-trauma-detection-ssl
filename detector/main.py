@@ -7,24 +7,20 @@ import argparse
 import os
 import sys
 import yaml
-
 import numpy as np
 import torch
-from criterion import build_criterion
-from optimizer import build_optimizer
-from utils.ap_calculator import RSNAAPCalculator
-from models.model_vdetr_unet import build_vdetr_unet
-from utils.io import save_checkpoint, resume_if_possible
 from torch.utils.data import DataLoader, DistributedSampler
-from models.unet_encoder import load_pretrained_unet_encoder
 from dataset.rsna_dataset import RSNATraumaDataset, collate_fn
-from loss.consistency_loss import ConsistencyLoss, get_consistency_weight
-from utils.dist import init_distributed, is_distributed, is_primary, get_rank
 from dataset.rsna_unlabeled_dataset import RSNAUnlabeledDataset, collate_fn_unlabeled
 from dataset.rsna_target_preparation import RSNADatasetConfig, prepare_targets_rsna
-
-
-
+from models.model_vdetr_unet import build_vdetr_unet
+from criterion import build_criterion
+from optimizer import build_optimizer
+from loss.consistency_loss import ConsistencyLoss, get_consistency_weight
+from utils.dist import init_distributed, is_distributed, is_primary, get_rank
+from utils.io import save_checkpoint, resume_if_possible
+from models.unet_encoder import load_pretrained_unet_encoder
+from utils.ap_calculator import RSNAAPCalculator
 
 
 def make_args_parser():
@@ -156,13 +152,29 @@ def load_config(config_path, args):
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
 
-        for section, params in config.items():
-            if isinstance(params, dict):
-                for key, value in params.items():
-                    setattr(args, key, value)
+        parser = make_args_parser()
+        defaults = {}
+        for action in parser._actions:
+            if action.dest != 'help':
+                defaults[action.dest] = action.default
+        
+        for key, value in config.items():
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    if hasattr(args, sub_key):
+                        if getattr(args, sub_key) == defaults.get(sub_key):
+                            setattr(args, sub_key, sub_value)
+                    else:
+                        print(f"Warning: Config parameter '{sub_key}' not recognized, skipping")
+            else:
+                if hasattr(args, key):
+                    if getattr(args, key) == defaults.get(key):
+                        setattr(args, key, value)
+                else:
+                    print(f"Warning: Config parameter '{key}' not recognized, skipping")
 
         print(f"Loaded config from {config_path}")
-        print(f"Key settings: nqueries={args.nqueries}, dec_nlayers={args.dec_nlayers}, ssl_start_epoch={args.ssl_start_epoch}")
+        print(f"Key settings: max_epoch={args.max_epoch}, nqueries={args.nqueries}, dec_nlayers={args.dec_nlayers}")
     else:
         print(f"Config file {config_path} not found, using command line args only")
 
@@ -186,7 +198,7 @@ def train_one_epoch(args, epoch, model, optimizer, criterion, dataset_config,
             max_weight=args.ssl_consistency_max_weight,
         )
         if is_primary():
-            print(f"[SSL] epoch={epoch}  consistency_weight={consistency_weight:.4f}")
+            print(f"  [SSL] epoch={epoch}  consistency_weight={consistency_weight:.4f}")
 
     for batch_idx, batch in enumerate(dataloader):
         for key in batch:
@@ -359,6 +371,7 @@ def main(local_rank, args):
             dist_backend="nccl",
         )
 
+    print(f"Called with args: {args}")
     torch.cuda.set_device(local_rank)
 
     np.random.seed(args.seed + get_rank())
@@ -372,7 +385,13 @@ def main(local_rank, args):
     dataset_config = RSNADatasetConfig()
 
     if args.test_only:
-        test_dataset = RSNATraumaDataset(args.data_dir, split='test', use_labeled_only=True)
+        test_dataset = RSNATraumaDataset(
+            args.data_dir, 
+            split='test', 
+            use_labeled_only=True,
+            train_ratio=0.80,
+            val_ratio=0.20
+        )
         test_loader = DataLoader(
             test_dataset,
             batch_size=args.batchsize_per_gpu,
@@ -385,8 +404,20 @@ def main(local_rank, args):
         train_dataset = None
         val_dataset = test_dataset
     else:
-        train_dataset = RSNATraumaDataset(args.data_dir, split='train', use_labeled_only=True)
-        val_dataset = RSNATraumaDataset(args.data_dir, split='val', use_labeled_only=True)
+        train_dataset = RSNATraumaDataset(
+            args.data_dir, 
+            split='train', 
+            use_labeled_only=True,
+            train_ratio=0.80,  # 80% = 78 files
+            val_ratio=0.20     # 20% = 20 files
+        )
+        val_dataset = RSNATraumaDataset(
+            args.data_dir, 
+            split='val', 
+            use_labeled_only=True,
+            train_ratio=0.80,  
+            val_ratio=0.20     
+        )
 
         if is_distributed():
             train_sampler = DistributedSampler(train_dataset, shuffle=True)
@@ -420,6 +451,9 @@ def main(local_rank, args):
             'test_sampler': val_sampler,
         }
 
+    print(f"Dataset: {len(train_dataset) if train_dataset else 0} train, {len(val_dataset)} val")
+
+
     if not os.path.exists(args.unet_checkpoint):
         raise FileNotFoundError(
             f"UNet checkpoint not found: {args.unet_checkpoint}\n"
@@ -432,7 +466,6 @@ def main(local_rank, args):
         device=f'cuda:{local_rank}'
     )
 
-    print("="*60 + "\n")
 
     model = build_vdetr_unet(args, dataset_config, unet_encoder)
     model = model.cuda(local_rank)
@@ -484,13 +517,14 @@ def main(local_rank, args):
 
         if is_primary():
             print("SEMI-SUPERVISED LEARNING ENABLED")
-            print(f"Unlabeled volumes : {len(unlabeled_dataset)}")
-            print(f"SSL start epoch   : {args.ssl_start_epoch}")
-            print(f"Warmup epochs     : {args.ssl_consistency_warmup_epochs}")
-            print(f"Max weight        : {args.ssl_consistency_max_weight}")
+            print(f"  Unlabeled volumes : {len(unlabeled_dataset)}")
+            print(f"  SSL start epoch   : {args.ssl_start_epoch}")
+            print(f"  Warmup epochs     : {args.ssl_consistency_warmup_epochs}")
+            print(f"  Max weight        : {args.ssl_consistency_max_weight}")
 
     if args.test_only:
         if args.test_ckpt is None or not os.path.isfile(args.test_ckpt):
+            print(f"Please specify a test checkpoint using --test_ckpt")
             sys.exit(1)
 
         sd = torch.load(args.test_ckpt, map_location=torch.device("cpu"), weights_only = False)
@@ -549,12 +583,14 @@ def main(local_rank, args):
                         filename="best_model.pth",
                     )
                     if is_primary():
-                        print(f"New best model saved! mAP@0.5: {best_map:.2f}")
+                        print(f"✓ New best model saved! mAP@0.5: {best_map:.2f}")
 
 
             if epoch == args.unfreeze_after_epoch and args.freeze_unet:
                 if is_primary():
+                    print("\n" + "="*60)
                     print(f"UNFREEZING UNET ENCODER at epoch {epoch}")
+                    print("="*60)
 
                 for name, param in model_no_ddp.unet_encoder.named_parameters():
                     if any(x in name for x in ['down', 'pool', 'bottleneck']):
@@ -589,8 +625,8 @@ def main(local_rank, args):
                     trainable = sum(p.numel() for p in model_no_ddp.parameters() if p.requires_grad)
                     total     = sum(p.numel() for p in model_no_ddp.parameters())
                     print(f"Trainable parameters: {trainable:,} / {total:,}")
-                    print(f"Encoder group : {len(encoder_params):,} params @ lr={encoder_lr}")
-                    print(f"Decoder group : {len(other_params):,} params @ lr={args.base_lr}")
+                    print(f"  Encoder group : {len(encoder_params):,} params @ lr={encoder_lr}")
+                    print(f"  Decoder group : {len(other_params):,} params @ lr={args.base_lr}")
 
             if getattr(args, '_optimizer_rebuilt', False):
                 epochs_since_unfreeze = epoch - args._unfreeze_epoch
@@ -599,7 +635,7 @@ def main(local_rank, args):
                     current_encoder_lr = args._encoder_lr_target * ramp_frac
                     optimizer.param_groups[0]['lr'] = current_encoder_lr
                     if is_primary():
-                        print(f"Encoder LR ramp at epoch {epoch}  encoder_lr={current_encoder_lr:.2e}")
+                        print(f"  [Encoder LR ramp] epoch {epoch}  encoder_lr={current_encoder_lr:.2e}")
 
 
 if __name__ == "__main__":

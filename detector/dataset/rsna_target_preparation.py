@@ -5,23 +5,20 @@ Copyright (c) 2026 | MIT License | https://github.com/shivasmic/3d-trauma-detect
 
 import torch
 import numpy as np
-from dataset.coordinate_adapter import RSNACoordinateAdapter
 from dataset.coordinate_adapter import get_rsna_coordinate_adapter
 
 
 def prepare_targets_rsna(batch, dataset_config, device):
-   
     batch_size = batch['dicom_volumes'].shape[0]
     coord_adapter = get_rsna_coordinate_adapter()
     
     min_coords, max_coords = batch['volume_dims']
     min_coords = min_coords.to(device)
     max_coords = max_coords.to(device)
-    volume_range = max_coords - min_coords  
+    volume_range = max_coords - min_coords  # [B, 3]
     
     targets = {}
     
-
     max_boxes = 5
     
     gt_box_corners = torch.zeros(batch_size, max_boxes, 8, 3, device=device)
@@ -43,12 +40,12 @@ def prepare_targets_rsna(batch, dataset_config, device):
             nactual_gt[b] = 1
             gt_box_present[b, 0] = 1.0
             
-            center_voxel = batch['bbox_center_voxel'][b:b+1].to(device)  
-            size_voxel = batch['bbox_size_voxel'][b:b+1].to(device)  
+            center_voxel = batch['bbox_center_voxel'][b:b+1].to(device)  # [1, 3]
+            size_voxel = batch['bbox_size_voxel'][b:b+1].to(device)  # [1, 3]
             
-            center_physical = coord_adapter.voxel_to_physical(center_voxel)  
+            center_physical = coord_adapter.voxel_to_physical(center_voxel)  # [1, 3]
             spacing = torch.tensor(coord_adapter.voxel_spacing, device=device, dtype=torch.float32)
-            size_physical = size_voxel * spacing  
+            size_physical = size_voxel * spacing  # [1, 3]
             
             gt_box_centers[b, 0] = center_physical[0]
             gt_box_sizes[b, 0] = size_physical[0]
@@ -66,11 +63,11 @@ def prepare_targets_rsna(batch, dataset_config, device):
             nactual_gt[b] = 0
     
     targets = {
-        'gt_box_corners': gt_box_corners, 
-        'gt_box_centers': gt_box_centers, 
+        'gt_box_corners': gt_box_corners,  
+        'gt_box_centers': gt_box_centers,  
         'gt_box_centers_normalized': gt_box_centers_normalized,  
         'gt_box_sizes': gt_box_sizes,  
-        'gt_box_sizes_normalized': gt_box_sizes_normalized, 
+        'gt_box_sizes_normalized': gt_box_sizes_normalized,  
         'gt_box_sem_cls_label': gt_box_sem_cls_label,  
         'gt_box_present': gt_box_present,  
         'gt_box_angles': gt_box_angles,  
@@ -87,10 +84,11 @@ class RSNADatasetConfig:
     def __init__(self):
         self.num_semcls = 1
         
-        self.num_angle_bin = 1 
+        self.num_angle_bin = 1  
         
+      
         self.mean_size_arr = np.array([
-            [30.0, 40.0, 40.0],  
+            [30.0, 40.0, 40.0],
         ])
         
         self.class_names = ['injury']
@@ -108,9 +106,9 @@ class RSNADatasetConfig:
         offsets = torch.tensor([
             [-1, -1, -1],  
             [-1, -1,  1],  
-            [-1,  1,  1],  
+            [-1,  1,  1], 
             [-1,  1, -1],  
-            [ 1, -1, -1],  
+            [ 1, -1, -1], 
             [ 1, -1,  1],  
             [ 1,  1,  1],  
             [ 1,  1, -1],  
@@ -118,11 +116,16 @@ class RSNADatasetConfig:
         
         corners = center.unsqueeze(2) + half_size.unsqueeze(2) * offsets.unsqueeze(0).unsqueeze(0)
         
-        return corners 
+        return corners  
 
 
 def test_target_preparation():
+    """Test target preparation with dummy data."""
+    print("Testing RSNA Target Preparation")
     
+    from dataset.coordinate_adapter import RSNACoordinateAdapter
+    
+    # Create dummy batch
     B = 2
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
@@ -130,7 +133,7 @@ def test_target_preparation():
     
     bbox_center_voxel = torch.tensor([
         [256.0, 168.0, 168.0],  
-        [0.0, 0.0, 0.0],         
+        [0.0, 0.0, 0.0],        
     ], device=device)
     
     bbox_size_voxel = torch.tensor([
@@ -159,11 +162,25 @@ def test_target_preparation():
     
     targets = prepare_targets_rsna(batch, dataset_config, device)
     
+    print("\nTarget structure:")
     for key, value in targets.items():
         if isinstance(value, torch.Tensor):
             print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
         else:
             print(f"  {key}: {value}")
+    
+    print("\nSample 0 (has injury):")
+    print(f"  nactual_gt: {targets['nactual_gt'][0]}")
+    print(f"  gt_box_present: {targets['gt_box_present'][0]}")
+    print(f"  gt_box_centers: {targets['gt_box_centers'][0, 0]}")
+    print(f"  gt_box_sizes: {targets['gt_box_sizes'][0, 0]}")
+    print(f"  gt_box_sem_cls_label: {targets['gt_box_sem_cls_label'][0, 0]}")
+    
+    print("\nSample 1 (no injury):")
+    print(f"  nactual_gt: {targets['nactual_gt'][1]}")
+    print(f"  gt_box_present: {targets['gt_box_present'][1]}")
+    
+    print("\n Target preparation test passed!")
 
 
 if __name__ == "__main__":

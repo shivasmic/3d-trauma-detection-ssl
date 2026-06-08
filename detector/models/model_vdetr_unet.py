@@ -24,16 +24,17 @@ class ModelVDETR_UNet(nn.Module):
                  unet_encoder,
                  decoder,
                  dataset_config,
-                 unet_channels=256,  
+                 unet_channels=256, 
                  unet_feature_resolution=(32, 21, 21),  
                  encoder_dim=256,
                  decoder_dim=256,
                  num_queries=256,  
-                 voxel_spacing=(2.0, 1.0, 1.0), 
-                 max_voxels=4096, 
+                 voxel_spacing=(2.0, 1.0, 1.0),  
+                 max_voxels=4096,  
                  querypos_mlp=False,
                  freeze_unet=False,
                  args=None):
+       
         super().__init__()
         
         self.unet_encoder = unet_encoder
@@ -98,7 +99,6 @@ class ModelVDETR_UNet(nn.Module):
         
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.parameters())
-        print(f"UNet encoder FROZEN")
         print(f"  Trainable params: {trainable:,} / {total:,} ({trainable/total*100:.1f}%)")
     
     def _unfreeze_unet(self):
@@ -107,31 +107,30 @@ class ModelVDETR_UNet(nn.Module):
         
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.parameters())
-        print(f"UNet encoder UNFROZEN")
         print(f"  Trainable params: {trainable:,} / {total:,} ({trainable/total*100:.1f}%)")
     
     def run_unet_encoder(self, dicom_volumes):
-       
         with torch.set_grad_enabled(not self.freeze_unet):
             unet_features = self.unet_encoder.encode(dicom_volumes)
         
-        
         features, xyz, pos_embed = self.feature_adapter(unet_features, volume_dims=None)
+        
         features = self.encoder_to_decoder_projection(
-            features.permute(1, 2, 0) 
+            features.permute(1, 2, 0)
         ).permute(2, 0, 1)  
         
         return features, xyz, pos_embed
     
     
     def get_query_embeddings(self, encoder_xyz, enc_features, volume_dims):
+        """..."""
         B = encoder_xyz.shape[0]
-        N = encoder_xyz.shape[1]  
+        N = encoder_xyz.shape[1]  # 4096
         
         if N >= self.num_queries:
             step = N // self.num_queries
             indices = torch.arange(0, N, step, device=encoder_xyz.device)[:self.num_queries]
-            query_xyz = encoder_xyz[:, indices, :] 
+            query_xyz = encoder_xyz[:, indices, :]  # [B, num_queries, 3]
             query_inds = indices
         else:
             query_xyz = torch.zeros(B, self.num_queries, 3, device=encoder_xyz.device)
@@ -142,7 +141,7 @@ class ModelVDETR_UNet(nn.Module):
             pos_embed = self.pos_embedding(query_xyz, input_range=volume_dims)
             query_embed = self.query_projection(pos_embed).permute(2, 0, 1)
         else:
-            query_embed = query_xyz.permute(1, 0, 2)  
+            query_embed = query_xyz.permute(1, 0, 2)  # [num_queries, B, 3]
         
         
         return query_xyz, query_embed, query_inds
@@ -177,7 +176,7 @@ class ModelVDETR_UNet(nn.Module):
             center_unnorm + half_size * torch.tensor([1, -1, 1], device=device),
             center_unnorm + half_size,
             center_unnorm + half_size * torch.tensor([-1, 1, 1], device=device),
-        ], dim=2)  
+        ], dim=2)  # [B, num_queries, 8, 3]
         
         num_classes = self.dataset_config.num_semcls
         point_cls_logits = torch.zeros(B, nQ, num_classes, device=device)
@@ -200,7 +199,7 @@ class ModelVDETR_UNet(nn.Module):
        
 
         if 'volume_dims' in inputs and inputs['volume_dims'] is not None:
-            volume_dims = inputs['volume_dims'] 
+            volume_dims = inputs['volume_dims']  
             if isinstance(volume_dims, tuple):
                 volume_dims = list(volume_dims)
             volume_dims = [x.to(device) for x in volume_dims]
@@ -211,7 +210,6 @@ class ModelVDETR_UNet(nn.Module):
             ]
 
         enc_features, enc_xyz, enc_pos = self.run_unet_encoder(dicom_volumes)
-
 
         if encoder_only:
             return {
@@ -246,7 +244,7 @@ class ModelVDETR_UNet(nn.Module):
             tgt=tgt,
             memory=enc_features,
             query_xyz=query_xyz,
-            enc_xyz=enc_xyz,  
+            enc_xyz=enc_xyz, 
             point_cloud_dims=volume_dims,
             query_pos=query_embed,
             enc_box_predictions=enc_box_predictions,
@@ -260,7 +258,6 @@ class ModelVDETR_UNet(nn.Module):
 
 
 def build_unet_decoder(args, dataset_config):
-    """Build transformer decoder with UNet-compatible layers"""
     from models.helpers import get_clones
     
     first_layer = FFNLayer(

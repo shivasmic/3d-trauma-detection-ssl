@@ -15,6 +15,10 @@ import time
 
 
 class PreprocessedVolumeDataset(Dataset):
+    """
+    Dataset that extracts random 3D patches from preprocessed volumes.
+    This is MUCH more efficient than processing full volumes.
+    """
     def __init__(
         self, 
         data_dir: str, 
@@ -23,7 +27,7 @@ class PreprocessedVolumeDataset(Dataset):
         use_labeled: bool = False
     ):
         if use_labeled:
-            pattern = '*_labeled.npz'
+            pattern = '*_liver.npz'
         else:
             pattern = '*.npz'
         
@@ -31,7 +35,12 @@ class PreprocessedVolumeDataset(Dataset):
         self.patch_size = patch_size
         self.patches_per_volume = patches_per_volume
         
+        # Calculate total number of patches per epoch
         self.total_patches = len(self.file_paths) * patches_per_volume
+        
+        print(f"Found {len(self.file_paths)} volumes")
+        print(f"Extracting {patches_per_volume} patches per volume")
+        print(f"Total patches per epoch: {self.total_patches}")
         
         if len(self.file_paths) == 0:
             raise ValueError(f"No .npz files found in {data_dir}")
@@ -40,17 +49,24 @@ class PreprocessedVolumeDataset(Dataset):
         return self.total_patches
 
     def __getitem__(self, idx):
+        # Map patch index to volume index
         volume_idx = idx // self.patches_per_volume
-        volume_idx = volume_idx % len(self.file_paths)  
+        volume_idx = volume_idx % len(self.file_paths) 
         
         data = np.load(self.file_paths[volume_idx])
-        volume = data['volume'] 
+        volume = data['volume']  # Shape: (512, 336, 336)
+        
         patch = self._extract_random_patch(volume)
-        patch_tensor = torch.from_numpy(patch).unsqueeze(0) 
+        
+        patch_tensor = torch.from_numpy(patch).unsqueeze(0)  
         
         return patch_tensor
     
     def _extract_random_patch(self, volume: np.ndarray) -> np.ndarray:
+        """
+        Extract a random cubic patch from the volume.
+        Handles both dimensions that are larger or smaller than patch_size.
+        """
         Z, Y, X = volume.shape
         ps = self.patch_size
         
@@ -84,6 +100,9 @@ class PreprocessedVolumeDataset(Dataset):
 
 
 def create_patch_mask(volume: torch.Tensor, mask_ratio: float = 0.75, patch_size: int = 8) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Creates patch-based mask for 3D volumes.
+    """
     B, C, D, H, W = volume.shape
     
     num_patches_d = D // patch_size
@@ -113,8 +132,6 @@ def create_patch_mask(volume: torch.Tensor, mask_ratio: float = 0.75, patch_size
                       w_start:w_start + patch_size] = -1.0
     
     return masked_volume
-
-
 
 class ConvBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, dropout_rate: float = 0.0):
@@ -193,16 +210,18 @@ class UNet3D(nn.Module):
         return out
 
 
-
 def ssl_training_pipeline(
-    data_dir: str = 'preprocessed_data',
-    model_path: str = '3D_unet_ssl_weights.pth',
+    data_dir: str = 'path to your volumes folder',
+    model_path: str = '3D_unet_weights.pth',
     num_epochs: int = 50,
     batch_size: int = 8,
     patch_size: int = 128,
     patches_per_volume: int = 4,
     use_labeled_only: bool = False
 ):
+
+    
+    print("3D U-Net SSL Pre-training (Patch-based MIM)")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
@@ -233,9 +252,11 @@ def ssl_training_pipeline(
     total_params = sum(p.numel() for p in ssl_model.parameters())
     print(f"Model parameters: {total_params:,}")
     
+    # Optimizer and loss
     optimizer = torch.optim.Adam(ssl_model.parameters(), lr=1e-4)
     criterion = nn.MSELoss()
     
+    # Training loop
     ssl_model.train()
     
     for epoch in range(num_epochs):
@@ -245,6 +266,7 @@ def ssl_training_pipeline(
         for batch_idx, original_patches in enumerate(ssl_dataloader):
             original_patches = original_patches.to(device)
             
+            # Mask patches
             masked_patches = create_patch_mask(
                 original_patches,
                 mask_ratio=0.75,
@@ -254,9 +276,7 @@ def ssl_training_pipeline(
             optimizer.zero_grad()
             
             reconstructed = ssl_model(masked_patches)
-            
             loss = criterion(reconstructed, original_patches)
-            
             loss.backward()
             optimizer.step()
             
@@ -270,7 +290,8 @@ def ssl_training_pipeline(
         
         print(f"\nEpoch {epoch+1} Complete:")
         print(f"  Avg Loss: {avg_loss:.6f}")
-      
+        print(f"  Time: {epoch_time:.2f}s")
+        print("-" * 60)
         
         if (epoch + 1) % 10 == 0:
             checkpoint_path = f"{model_path}.epoch_{epoch+1}.pth"
@@ -278,16 +299,18 @@ def ssl_training_pipeline(
             print(f"  Checkpoint saved: {checkpoint_path}\n")
     
     torch.save(ssl_model.state_dict(), model_path)
+    print("=" * 60)
     print(f"Training Complete! Model saved: {model_path}")
+    print("=" * 60)
 
 
 if __name__ == '__main__':
     ssl_training_pipeline(
-        data_dir='preprocessed_data',
-        model_path='path to your pretrained 3D UNet encoder',
+        data_dir='path to the folder where the preprocessed volumes are stored',
+        model_path='3D_unet_weights.pth',
         num_epochs=50,
         batch_size=8,       
-        patch_size=128,   
+        patch_size=128,     
         patches_per_volume=4,  
         use_labeled_only=False 
     )

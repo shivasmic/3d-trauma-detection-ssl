@@ -34,13 +34,12 @@ class Matcher(nn.Module):
 
     @torch.no_grad()
     def forward(self, outputs, targets):
-       
         batchsize = outputs["sem_cls_prob"].shape[0]
         nqueries = outputs["sem_cls_prob"].shape[1]
         ngt = targets["gt_box_sem_cls_label"].shape[1]
         nactual_gt = targets["nactual_gt"]
 
-        pred_cls_prob = outputs["sem_cls_prob"].sigmoid()  
+        pred_cls_prob = outputs["sem_cls_prob"].sigmoid() 
         gt_box_sem_cls_labels = (
             targets["gt_box_sem_cls_label"]
             .unsqueeze(1)
@@ -56,6 +55,7 @@ class Matcher(nn.Module):
         center_mat = outputs["center_reg_dist"].detach()
         
         size_mat = outputs["size_reg_dist"].detach()
+
         giou_mat = -outputs["gious"].detach()
 
         final_cost = (
@@ -133,6 +133,7 @@ class Criterion(nn.Module):
         return {"loss_sem_cls": loss}
 
     def loss_center(self, outputs, targets, assignments):
+        """Center regression loss."""
         center_dist = outputs["center_reg_dist"]
 
         if targets["num_boxes_replica"] > 0:
@@ -153,6 +154,7 @@ class Criterion(nn.Module):
         return {"loss_center": center_loss}
 
     def loss_size(self, outputs, targets, assignments):
+        """Size regression loss (in log space)."""
         if targets["num_boxes_replica"] > 0:
             gt_box_sizes = targets["gt_box_sizes"]
             
@@ -212,6 +214,7 @@ class Criterion(nn.Module):
 
     @torch.no_grad()
     def loss_cardinality(self, outputs, targets, assignments):
+        """Cardinality error (for logging only)."""
         pred_logits = outputs["sem_cls_logits"]
         pred_objects = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1)
         card_err = F.l1_loss(pred_objects.float(), targets["nactual_gt"].float())

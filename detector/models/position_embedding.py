@@ -7,9 +7,13 @@
 # Group-Free-3D
 # Copyright (c) Group-Free-3D authors. All Rights Reserved.
 # ------------------------------------------------------------------------
+
 """
-Various positional encodings for the transformer.
+3D Trauma Detection | Authors: Shivam Chaudhary, Sheethal Bhat, Andreas Maier | FAU Erlangen-Nürnberg
+Copyright (c) 2026 | MIT License | https://github.com/shivasmic/3d-trauma-detection-ssl
 """
+
+
 import math
 import torch
 from torch import nn
@@ -41,14 +45,12 @@ class PositionEmbeddingCoordsSine(nn.Module):
         if pos_type == "fourier":
             assert d_pos is not None
             assert d_pos % 2 == 0
-            # define a gaussian matrix input_ch -> output_ch
             B = torch.empty((d_in, d_pos // 2), dtype=torch.float32).normal_()
             B *= gauss_scale
             self.register_buffer("gauss_B", B.float())
             self.d_pos = d_pos
 
     def get_sine_embeddings(self, xyz, num_channels, input_range):
-        # clone coords so that shift/scale operations do not affect original tensor
         orig_xyz = xyz
         xyz = orig_xyz.clone()
 
@@ -59,7 +61,6 @@ class PositionEmbeddingCoordsSine(nn.Module):
         ndim = num_channels // xyz.shape[2]
         if ndim % 2 != 0:
             ndim -= 1
-        # automatically handle remainder by assiging it to the first dim
         rems = num_channels - (ndim * xyz.shape[2])
 
         assert (
@@ -72,7 +73,6 @@ class PositionEmbeddingCoordsSine(nn.Module):
         for d in range(xyz.shape[2]):
             cdim = ndim
             if rems > 0:
-                # add remainder in increments of two to maintain even size
                 cdim += 2
                 rems -= 2
 
@@ -80,7 +80,6 @@ class PositionEmbeddingCoordsSine(nn.Module):
                 dim_t = torch.arange(cdim, dtype=torch.float32, device=xyz.device)
                 dim_t = self.temperature ** (2 * (dim_t // 2) / cdim)
 
-            # create batch x cdim x nccords embedding
             raw_pos = xyz[:, :, d]
             if self.scale:
                 raw_pos *= self.scale

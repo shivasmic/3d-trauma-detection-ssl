@@ -7,11 +7,14 @@ import torch
 import numpy as np
 
 class RSNACoordinateAdapter:
+    """
+    Handles coordinate transformations for RSNA trauma dataset.
+    """
     
     def __init__(self):
-        self.voxel_spacing = np.array([2.0, 1.0, 1.0], dtype=np.float32)  # (Z, Y, X) in mm
-        self.volume_shape = np.array([512, 336, 336], dtype=np.int32)     # (Z, Y, X) in voxels
-
+        """Initialize with RSNA-specific parameters."""
+        self.voxel_spacing = np.array([2.0, 1.0, 1.0], dtype=np.float32)  
+        self.volume_shape = np.array([512, 336, 336], dtype=np.int32)     
         self.physical_dims = self.volume_shape * self.voxel_spacing
         
         self.origin = np.zeros(3, dtype=np.float32)
@@ -53,29 +56,27 @@ class RSNACoordinateAdapter:
         
         center_phys = self.voxel_to_physical(bbox_center_voxel)
         
-        # Convert size to physical (accounting for anisotropic spacing)
         spacing = torch.tensor(self.voxel_spacing, device=device, dtype=dtype)
         size_phys = bbox_size_voxel * spacing
         
         half_size = size_phys / 2
         
-        
         offsets = torch.tensor([
             [-1, -1, -1],  
-            [-1, -1,  1], 
+            [-1, -1,  1],  
             [-1,  1,  1],  
-            [-1,  1, -1], 
+            [-1,  1, -1],  
             [ 1, -1, -1],  
             [ 1, -1,  1],  
             [ 1,  1,  1],  
             [ 1,  1, -1],  
         ], device=device, dtype=dtype)
         
-        
+
         center_expanded = center_phys.unsqueeze(2)           
-        half_size_expanded = half_size.unsqueeze(2)         
+        half_size_expanded = half_size.unsqueeze(2)          
         offsets_expanded = offsets.unsqueeze(0).unsqueeze(0) 
-        corners = center_expanded + half_size_expanded * offsets_expanded  
+        corners = center_expanded + half_size_expanded * offsets_expanded   
         
         return corners  
     
@@ -101,12 +102,38 @@ class RSNACoordinateAdapter:
         return valid
 
 
+# Singleton instance
 _adapter = None
 
 def get_rsna_coordinate_adapter():
-    """Get singleton coordinate adapter instance."""
     global _adapter
     if _adapter is None:
         _adapter = RSNACoordinateAdapter()
     return _adapter
 
+
+if __name__ == "__main__":
+    adapter = RSNACoordinateAdapter()
+    
+    bbox_center_voxel = torch.tensor([[[256.0, 168.0, 168.0]]])
+    bbox_size_voxel = torch.tensor([[[20.0, 30.0, 30.0]]])
+    
+    print(f"\nBBox center (voxels Z,Y,X): {bbox_center_voxel[0, 0].numpy()}")
+    print(f"BBox size (voxels Z,Y,X): {bbox_size_voxel[0, 0].numpy()}")
+    
+    center_phys = adapter.voxel_to_physical(bbox_center_voxel)
+    size_phys = bbox_size_voxel * torch.tensor(adapter.voxel_spacing)
+    
+    print(f"\nBBox center (mm Z,Y,X): {center_phys[0, 0].numpy()}")
+    print(f"BBox size (mm Z,Y,X): {size_phys[0, 0].numpy()}")
+    
+    corners = adapter.bbox_voxel_to_corners_physical(bbox_center_voxel, bbox_size_voxel)
+    
+    for i in range(4):
+        print(f"  Corner {i}: z={corners[0, 0, i, 0]:.1f}, y={corners[0, 0, i, 1]:.1f}, x={corners[0, 0, i, 2]:.1f}")
+    print(f"Top face (z_max = {corners[0,0,4,0]:.1f}):")
+    for i in range(4, 8):
+        print(f"  Corner {i}: z={corners[0, 0, i, 0]:.1f}, y={corners[0, 0, i, 1]:.1f}, x={corners[0, 0, i, 2]:.1f}")
+    
+    valid = adapter.validate_bbox(bbox_center_voxel, bbox_size_voxel)
+    print(f"\nBBox valid: {valid[0, 0].item()}")

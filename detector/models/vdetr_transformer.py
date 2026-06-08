@@ -1,5 +1,6 @@
 # Copyright (c) V-DETR authors. All Rights Reserved.
 
+
 from typing import Optional
 from functools import partial
 
@@ -14,12 +15,10 @@ import torch.distributed as dist
 from models.position_embedding import PositionEmbeddingCoordsSine           
 from models.helpers import (ACTIVATION_DICT, NORM_DICT, WEIGHT_INIT_DICT, 
                             GenericMLP, get_clones, PositionEmbeddingLearned)
-from utils.pc_util import scale_points, shift_scale_points
 
+from utils.pc_util import scale_points, shift_scale_points
 class BoxProcessor(object):
-    """
-    Class to convert V-DETR MLP head outputs into bounding boxes
-    """
+    
 
     def __init__(self, dataset_config, cls_loss="celoss"):
         self.dataset_config = dataset_config
@@ -92,7 +91,7 @@ def inverse_sigmoid(x, eps=1e-5):
 
 def convert_corners_camera2lidar(corners_camera):
     corners_lidar = corners_camera
-    corners_lidar[..., 1] *= -1 
+    corners_lidar[..., 1] *= -1 # X, -Z, Y
     corners_lidar[..., [0, 1, 2]] = corners_lidar[..., [0, 2, 1]]
     return corners_lidar
 
@@ -195,7 +194,7 @@ class TransformerDecoder(nn.Module):
             input_dim=decoder_dim,
         )
 
-        
+
         if self.cls_loss.split('_')[0] == "focalloss":
             semcls_head = mlp_func(output_dim=dataset_config.num_semcls)
         else:
@@ -248,25 +247,21 @@ class TransformerDecoder(nn.Module):
         )
         cls_logits = self.mlp_heads[idx]["sem_cls_head"](box_features).transpose(1, 2)
 
-        #prepare pre_size and pre_center
         scene_size = point_cloud_dims[1]-point_cloud_dims[0]
         pre_center_unnormalized = pre_center_normalized*scene_size.unsqueeze(1).repeat(1,num_queries,1)+point_cloud_dims[0].unsqueeze(1).repeat(1,num_queries,1)
         pre_size_unnormalized = pre_size_normalized*scene_size.unsqueeze(1).repeat(1,num_queries,1)
 
-        #center
         assert  pre_center_normalized!=None
         center_reg =  self.mlp_heads[idx]["center_head"](box_features).transpose(1, 2).contiguous().view(batch,num_queries,3).contiguous()
         center_unnormalized = center_reg * pre_size_unnormalized + pre_center_unnormalized
         center_normalized = (center_unnormalized - point_cloud_dims[0].unsqueeze(1).repeat(1,num_queries,1))/scene_size.unsqueeze(1).repeat(1,num_queries,1)
 
             
-        #size
         assert  pre_size_normalized!=None
         size_reg = self.mlp_heads[idx]["size_head"](box_features).transpose(1, 2).contiguous().view(batch,num_queries,3).contiguous()
         size_unnormalized = torch.exp(size_reg)*pre_size_unnormalized
         size_normalized = size_unnormalized/scene_size.unsqueeze(1).repeat(1,num_queries,1)
 
-        #angle
         angle_logits = self.mlp_heads[idx]["angle_cls_head"](box_features).transpose(1, 2)
         angle_residual_normalized = self.mlp_heads[idx]["angle_residual_head"](
             box_features
@@ -279,7 +274,6 @@ class TransformerDecoder(nn.Module):
         )
 
 
-        #corners
         box_corners = self.box_processor.box_parametrization_to_corners(
             center_unnormalized, size_unnormalized, angle_continuous
         )               
@@ -312,7 +306,6 @@ class TransformerDecoder(nn.Module):
             "box_corners": box_corners,
             "box_corners_axis_align": box_corners_axis_align,
         }
-        #object-wise normalize
         box_prediction["pre_box_center_unnormalized"] = pre_center_unnormalized
         box_prediction["center_reg"] = center_reg
         box_prediction["pre_box_size_unnormalized"] = pre_size_unnormalized
@@ -371,7 +364,6 @@ class TransformerDecoder(nn.Module):
                 box_prediction["angle_continuous"].clone().detach(), 1, \
                 topk_proposals
             )
-        # will used to refine in predition 
         proposal_center_normalized = torch.gather(
                 box_prediction["center_normalized"].clone().detach(), 1, \
                 topk_proposals.unsqueeze(-1).repeat(1, 1 ,3)
@@ -427,14 +419,12 @@ class TransformerDecoder(nn.Module):
             attns = torch.stack(attns)
 
         if self.return_intermediate:
-            # bbox_predictions = torch.stack(intermediate)
-            # intermediate decoder layer outputs are only used during training
             aux_outputs = intermediate[:-1]
             outputs = intermediate[-1]
 
             return {
-                "outputs": outputs,  # output from last layer of decoder
-                "aux_outputs": aux_outputs,  # output from intermediate layers of decoder
+                "outputs": outputs,  
+                "aux_outputs": aux_outputs, 
             }, attns
 
         return {"outputs": box_prediction}, attns
@@ -454,7 +444,6 @@ class GlobalDecoderLayer(nn.Module):
             self.self_attn = ShareSelfAttention(d_model, nhead, dropout=dropout)
         else:
             self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        # cross attn layer
         self.multihead_attn = GlobalShareCrossAttention(d_model, nhead,
             attn_drop=dropout, proj_drop=dropout, args=args)
                 
@@ -466,7 +455,6 @@ class GlobalDecoderLayer(nn.Module):
         self.dropout2 = nn.Dropout(dropout, inplace=False)
         self.dropout3 = nn.Dropout(dropout, inplace=False)
 
-        # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout, inplace=False)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
@@ -501,7 +489,6 @@ class GlobalDecoderLayer(nn.Module):
         else:
             tgt2, attn = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
                             key=memory,
-                            # If need pos for key
                             reference_point=reference_point, 
                             reference_angle=reference_angle,
                             xyz = enc_xyz,
@@ -541,7 +528,6 @@ class GlobalDecoderLayer(nn.Module):
         else:
             tgt2, attn = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
                             key=memory,
-                            # If need pos for key
                             reference_point=reference_point, 
                             reference_angle=reference_angle,
                             xyz = enc_xyz,
@@ -575,7 +561,6 @@ class FFNLayer(nn.Module):
                  dropout=0.1,norm_fn_name="ln",
                  activation="relu", normalize_before=True,):
         super().__init__()
-        # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout, inplace=False)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
@@ -699,18 +684,18 @@ class GlobalShareCrossAttention(nn.Module):
             deltas = reference_point[:,:,None,i,:] - xyz[:,None,:,:]
             if self.angle_type == "object_coords" and reference_angle is not None:
                 deltas[..., 2] *= -1 
-                deltas[..., [0, 1, 2]] = deltas[..., [0, 2, 1]] # X,Y,Z -> X, -Z, Y
+                deltas[..., [0, 1, 2]] = deltas[..., [0, 2, 1]] 
 
-                R = roty_batch_tensor(reference_angle) # 4, 256, 3, 3
+                R = roty_batch_tensor(reference_angle)
                 deltas = torch.matmul(deltas, R)
 
                 deltas[..., 1] *= -1 
-                deltas[..., [0, 1, 2]] = deltas[..., [0, 2, 1]] # X, -Z, Y -> X,Y,Z
+                deltas[..., [0, 1, 2]] = deltas[..., [0, 2, 1]]
 
             deltas = torch.sign(deltas) * torch.log2(torch.abs(deltas)*self.log_scale + 1.0) / np.log2(8)
             delta = deltas / self.max_value # B, nQ, nP, 3
             
-            rpe_table = self.cpb_mlps[i](self.relative_coords_table).permute(0, 4, 1, 2, 3) # B, 10, 10, 10, nH
+            rpe_table = self.cpb_mlps[i](self.relative_coords_table).permute(0, 4, 1, 2, 3)
             if i == 0:
                 rpe = F.grid_sample(rpe_table, delta.view(1, 1, 1, -1, 3).to(rpe_table.dtype), mode=self.interp_method) \
                         .squeeze().view(-1, B, nQ, nK).permute(1, 0, 2, 3)
@@ -730,7 +715,6 @@ class GlobalShareCrossAttention(nn.Module):
         
         if attn_mask is not None:
             attn_mask = attn_mask.unsqueeze(1).repeat(1,self.num_heads,1,1)
-            #attn_mask = attn_mask.reshape(attn.shape)
             if attn_mask.dtype == torch.bool:
                 attn.masked_fill_(attn_mask, float(-100))
             else:

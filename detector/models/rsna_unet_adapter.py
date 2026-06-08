@@ -11,6 +11,7 @@ from dataset.coordinate_adapter import get_rsna_coordinate_adapter
 
 
 class RSNAUNetFeatureAdapter(nn.Module):
+    
     def __init__(self, 
                  unet_channels=256,  
                  transformer_dim=256,
@@ -18,7 +19,6 @@ class RSNAUNetFeatureAdapter(nn.Module):
                  use_all_voxels=False,
                  max_voxels=4096,  
                  args=None):
-    
         super().__init__()
         self.unet_channels = unet_channels
         self.transformer_dim = transformer_dim
@@ -31,11 +31,14 @@ class RSNAUNetFeatureAdapter(nn.Module):
         if feature_resolution is not None:
             self.downsample_factor = (
                 512 // feature_resolution[0],  
-                336 // feature_resolution[1],  
-                336 // feature_resolution[2]   
+                336 // feature_resolution[1], 
+                336 // feature_resolution[2]  
             )
             
+            total_voxels = feature_resolution[0] * feature_resolution[1] * feature_resolution[2]
             
+            
+            # Effective voxel spacing after downsampling
             self.effective_spacing = tuple(
                 self.coord_adapter.voxel_spacing[i] * self.downsample_factor[i]
                 for i in range(3)
@@ -70,8 +73,10 @@ class RSNAUNetFeatureAdapter(nn.Module):
                 self.pos_embed_learned = nn.Parameter(
                     torch.randn(1, n_voxels, transformer_dim) * 0.02
                 )
+                print(f"  Using learned positional embeddings: {self.pos_embed_learned.shape}")
             else:
                 self.pos_embed_learned = None
+                print(f"  No learned embeddings (will sample {max_voxels} from {n_voxels})")
         else:
             self.pos_embed_learned = None
     
@@ -103,7 +108,6 @@ class RSNAUNetFeatureAdapter(nn.Module):
         if N <= n_samples:
             return features, xyz
         
-       
         indices = torch.randperm(N, device=features.device)[:n_samples]
         indices = indices.sort()[0]  
         
@@ -120,11 +124,13 @@ class RSNAUNetFeatureAdapter(nn.Module):
         assert (D, H, W) == self.feature_resolution, \
             f"Expected resolution {self.feature_resolution}, got ({D}, {H}, {W})"
         
-        features = self.feature_projection(unet_features) 
-        features = self.spatial_conv(features)  
-        xyz = self.generate_voxel_coordinates(features.shape, device)  
+        features = self.feature_projection(unet_features)  
         
-        N_voxels = D * H * W 
+        features = self.spatial_conv(features) 
+        
+        xyz = self.generate_voxel_coordinates(features.shape, device) 
+        
+        N_voxels = D * H * W  
         features_flat = features.flatten(2)  
         features_flat = features_flat.permute(2, 0, 1)  
         
@@ -145,13 +151,58 @@ class RSNAUNetFeatureAdapter(nn.Module):
             xyz, 
             num_channels=self.transformer_dim,
             input_range=volume_dims
-        ) 
+        )  
         
-        pos_embed = pos_embed.permute(2, 0, 1)  
-
+        pos_embed = pos_embed.permute(2, 0, 1)  ]
+        
         if self.pos_embed_learned is not None and features_flat.shape[0] == self.pos_embed_learned.shape[1]:
             learned_pos = self.pos_embed_learned.permute(1, 0, 2)  
-            learned_pos = learned_pos.expand(-1, B, -1)  
+            learned_pos = learned_pos.expand(-1, B, -1) 
             pos_embed = pos_embed + learned_pos
         
         return features_flat, xyz, pos_embed
+
+
+def test_rsna_adapter():
+    
+    B = 2
+    unet_channels = 256  # Changed from 512
+    D, H, W = 32, 21, 21  # Changed from 64, 42, 42
+    
+    print(f"\nSimulating UNet output:")
+    print(f"  Batch size: {B}")
+    print(f"  Channels: {unet_channels}")
+    print(f"  Spatial shape: ({D}, {H}, {W})")
+    print(f"  Total voxels: {D*H*W:,}")
+    
+    # Create dummy UNet features
+    unet_features = torch.randn(B, unet_channels, D, H, W).cuda()
+    
+    # Create adapter
+    adapter = RSNAUNetFeatureAdapter(
+        unet_channels=unet_channels,
+        transformer_dim=256,
+        feature_resolution=(D, H, W),
+        use_all_voxels=False,
+        max_voxels=4096  # Changed from 8192
+    ).cuda()
+    
+    # Forward pass
+    print(f"\nRunning forward pass...")
+    features, xyz, pos_embed = adapter(unet_features)
+    
+    print(f"\nOutput shapes:")
+    print(f"  Features: {features.shape}")
+    print(f"  Coordinates (xyz): {xyz.shape}")
+    print(f"  Position embeddings: {pos_embed.shape}")
+    
+    print(f"\nCoordinate statistics (mm):")
+    print(f"  Z range: [{xyz[0, :, 0].min():.1f}, {xyz[0, :, 0].max():.1f}]")
+    print(f"  Y range: [{xyz[0, :, 1].min():.1f}, {xyz[0, :, 1].max():.1f}]")
+    print(f"  X range: [{xyz[0, :, 2].min():.1f}, {xyz[0, :, 2].max():.1f}]")
+    
+    print(f"\nExpected output:")
+    print(f"  Features should be: [4096, {B}, 256] ✓" if features.shape == torch.Size([4096, B, 256]) else f"  ✗ Got {features.shape}")
+    print(f"  XYZ should be: [{B}, 4096, 3] ✓" if xyz.shape == torch.Size([B, 4096, 3]) else f"  ✗ Got {xyz.shape}")
+    
+    print(f"\n Adapter test passed!")

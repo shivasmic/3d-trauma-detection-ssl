@@ -29,6 +29,7 @@ class ConsistencyLoss(nn.Module):
         self.max_weight = max_weight
 
     def forward(self, weak_outputs, strong_outputs, epoch=0):  
+      
         
         if epoch < self.start_epoch:
             device = list(weak_outputs['outputs'].values())[0].device
@@ -50,7 +51,6 @@ class ConsistencyLoss(nn.Module):
         strong_center = strong_pred['center_unnormalized']
         loss_center = F.mse_loss(strong_center, weak_center.detach())
 
-
         weak_size = weak_pred['size_unnormalized']
         strong_size = strong_pred['size_unnormalized']
         loss_size = F.mse_loss(strong_size, weak_size.detach())
@@ -69,9 +69,8 @@ class ConsistencyLoss(nn.Module):
             strong_log_soft,
             weak_soft,
             reduction='batchmean'
-        ) * (self.temperature ** 2)  
+        ) * (self.temperature ** 2)  # Rescale by T^2 as per Hinton et al.
 
-   
         total_loss = ssl_weight * (
             self.center_weight * loss_center +
             self.size_weight  * loss_size +
@@ -87,6 +86,7 @@ class ConsistencyLoss(nn.Module):
         }
 
         return total_loss, loss_detail
+
 
 
 def get_consistency_weight(epoch, warmup_epochs=10, max_weight=1.0, start_epoch=0):

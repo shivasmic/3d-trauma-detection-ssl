@@ -6,7 +6,6 @@ RSNA-specific AP Calculator for trauma detection.
 Simplified from V-DETR's APCalculator for medical imaging with axis-aligned boxes.
 """
 
-
 import numpy as np
 import torch
 from collections import OrderedDict
@@ -14,7 +13,6 @@ from typing import Dict, List, Tuple, Optional
 
 
 def compute_iou_3d_batch(pred_corners: np.ndarray, gt_corners: np.ndarray) -> np.ndarray:
-    
     N = pred_corners.shape[0]
     M = gt_corners.shape[0]
     ious = np.zeros((N, M))
@@ -25,7 +23,7 @@ def compute_iou_3d_batch(pred_corners: np.ndarray, gt_corners: np.ndarray) -> np
         pred_volume = np.prod(pred_max - pred_min + 1e-8)
         
         for j in range(M):
-            gt_min = gt_corners[j].min(axis=0)  
+            gt_min = gt_corners[j].min(axis=0) 
             gt_max = gt_corners[j].max(axis=0)  
             gt_volume = np.prod(gt_max - gt_min + 1e-8)
             
@@ -70,7 +68,7 @@ def parse_rsna_predictions(
                 f"Expected 1 (binary focal loss) or 2 (multi-class)."
             )
         
-        scores = obj_probs[b] * injury_cls_probs  
+        scores = obj_probs[b] * injury_cls_probs  # [nQ]
         
         valid_mask = scores > conf_thresh
         valid_indices = np.where(valid_mask)[0]
@@ -120,7 +118,7 @@ def parse_rsna_ground_truth(
     gt_box_corners: torch.Tensor,
     gt_box_present: torch.Tensor,
 ) -> List[List[Tuple]]:
-   
+    
     gt_corners = gt_box_corners.detach().cpu().numpy()
     gt_present = gt_box_present.detach().cpu().numpy()
     
@@ -147,7 +145,7 @@ def compute_ap_for_class(
     iou_thresh: float = 0.5,
     class_id: int = 1,
 ) -> Tuple[float, float, List[float], List[float]]:
-   
+    
     pred_class = [(corners, score) for (cls, corners, score) in pred_list if cls == class_id]
     gt_class = [corners for (cls, corners) in gt_list if cls == class_id]
     
@@ -169,8 +167,8 @@ def compute_ap_for_class(
     for pred_idx, (pred_corners, score) in enumerate(pred_class):
         if num_gt > 0:
             ious = compute_iou_3d_batch(
-                pred_corners[np.newaxis, ...],
-                np.array(gt_class)              
+                pred_corners[np.newaxis, ...], 
+                np.array(gt_class)               
             )[0]  
             
             best_gt_idx = np.argmax(ious)
@@ -204,7 +202,6 @@ def compute_ap_for_class(
 
 
 class RSNAAPCalculator:
-    
     def __init__(
         self,
         dataset_config,
@@ -214,6 +211,7 @@ class RSNAAPCalculator:
         use_nms: bool = True,
         class2type_map: Optional[Dict] = None,
     ):
+        
         self.dataset_config = dataset_config
         self.ap_iou_thresh = ap_iou_thresh
         self.conf_thresh = conf_thresh
@@ -225,7 +223,7 @@ class RSNAAPCalculator:
     
     def reset(self):
         self.all_preds = []  
-        self.all_gts = []   
+        self.all_gts = []    
         self.scan_cnt = 0
     
     def step_meter(self, outputs: Dict, targets: Dict):
@@ -250,8 +248,9 @@ class RSNAAPCalculator:
             self.all_preds.extend(preds)
             self.all_gts.extend(gts)
             self.scan_cnt += 1
-    
+
     def compute_metrics(self) -> OrderedDict:
+
         overall_ret = OrderedDict()
         
         for iou_thresh in self.ap_iou_thresh:
@@ -267,7 +266,7 @@ class RSNAAPCalculator:
             class_name = self.class2type_map[1]
             ret_dict[f"{class_name} Average Precision"] = ap
             ret_dict[f"{class_name} Recall"] = ar
-            ret_dict["mAP"] = ap  
+            ret_dict["mAP"] = ap 
             ret_dict["AR"] = ar
             
             overall_ret[iou_thresh] = ret_dict

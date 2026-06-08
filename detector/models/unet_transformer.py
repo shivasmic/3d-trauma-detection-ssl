@@ -21,6 +21,7 @@ from models.vdetr_transformer import (
 
 
 class UNetCrossAttention(nn.Module):
+    
     def __init__(self, dim, num_heads, qkv_bias=True, 
                  attn_drop=0.0, proj_drop=0.0, args=None):
         super().__init__()
@@ -66,9 +67,9 @@ class UNetCrossAttention(nn.Module):
 
     def forward(self, query, key, reference_point, reference_angle, 
                 xyz_vol, attn_mask=None, key_padding_mask=None):
-        
-        key = key.permute(1, 0, 2)  
-        query = query.permute(1, 0, 2)  
+       
+        key = key.permute(1, 0, 2)  # [B, nK, Dim]
+        query = query.permute(1, 0, 2)  # [B, nQ, Dim]
         
         B, nQ = reference_point.shape[:2]
         nK = xyz_vol.shape[1]
@@ -80,18 +81,18 @@ class UNetCrossAttention(nn.Module):
             
             if self.angle_type == "object_coords" and reference_angle is not None:
                 deltas[..., 2] *= -1
-                deltas[..., [0, 1, 2]] = deltas[..., [0, 2, 1]]
+                deltas[..., [0, 1, 2]] = deltas[..., [0, 2, 1]]  
                 
                 R = roty_batch_tensor(reference_angle)  
                 deltas = torch.matmul(deltas, R)
                 
                 deltas[..., 1] *= -1
-                deltas[..., [0, 1, 2]] = deltas[..., [0, 2, 1]] 
+                deltas[..., [0, 1, 2]] = deltas[..., [0, 2, 1]]  
             
             deltas = torch.sign(deltas) * torch.log2(
                 torch.abs(deltas) * self.log_scale + 1.0
             ) / np.log2(8)
-            delta = deltas / self.max_value 
+            delta = deltas / self.max_value  
             
             rpe_table = self.cpb_mlps[i](self.relative_coords_table).permute(0, 4, 1, 2, 3)
             
@@ -106,7 +107,7 @@ class UNetCrossAttention(nn.Module):
             if i == 0:
                 rpe = rpe_i
             else:
-                rpe = rpe + rpe_i 
+                rpe = rpe + rpe_i  
         
         B_, N_key, C = key.shape
         k = self.k(key).reshape(B_, N_key, 1, C // self.num_heads).permute(0, 2, 1, 3)
@@ -117,6 +118,7 @@ class UNetCrossAttention(nn.Module):
         q = q * self.scale
         
         attn = q @ k.transpose(-2, -1) 
+        
         attn = attn + rpe
         
         if attn_mask is not None:
@@ -197,7 +199,7 @@ class UNetDecoderLayer(nn.Module):
             tgt2, attn = self.multihead_attn(
                 query=self.with_pos_embed(tgt, query_pos),
                 key=memory,
-                reference_point=reference_point, 
+                reference_point=reference_point,  
                 reference_angle=reference_angle,
                 xyz_vol=xyz_vol,
                 attn_mask=memory_mask,
@@ -231,7 +233,7 @@ class UNetDecoderLayer(nn.Module):
             tgt2, attn = self.multihead_attn(
                 query=self.with_pos_embed(tgt2, query_pos),
                 key=self.with_pos_embed(memory, pos),
-                reference_point=reference_point, 
+                reference_point=reference_point,  
                 reference_angle=reference_angle,
                 xyz_vol=xyz_vol,
                 attn_mask=memory_mask,
@@ -262,7 +264,7 @@ class UNetDecoderLayer(nn.Module):
                 tgt_mask=None, memory_mask=None,
                 tgt_key_padding_mask=None, memory_key_padding_mask=None,
                 pos=None, query_pos=None, return_attn_weights=False):
-       
+
         if self.normalize_before:
             return self.forward_pre(
                 tgt, memory, reference_point, reference_angle, xyz_vol,

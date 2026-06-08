@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.position_embedding import PositionEmbeddingCoordsSine
+from utils.pc_util import shift_scale_points
 
 
 class UNetFeatureAdapter(nn.Module):
@@ -29,6 +30,7 @@ class UNetFeatureAdapter(nn.Module):
         self.max_voxels = max_voxels
         self.use_fpn = use_fpn
         
+    
         self.feature_projection = nn.Sequential(
             nn.Conv3d(unet_channels, transformer_dim, kernel_size=1, bias=False),
             nn.GroupNorm(32, transformer_dim),
@@ -76,6 +78,7 @@ class UNetFeatureAdapter(nn.Module):
         
         xyz = torch.stack([grid_w, grid_h, grid_d], dim=-1)
         xyz = xyz.reshape(-1, 3)
+        
         xyz = xyz.unsqueeze(0).expand(B, -1, -1)
         
         return xyz
@@ -89,8 +92,8 @@ class UNetFeatureAdapter(nn.Module):
         step = N // n_samples
         indices = torch.arange(0, N, step, device=features.device)[:n_samples]
         
-        sampled_features = features[indices] 
-        sampled_xyz = xyz[:, indices, :]  
+        sampled_features = features[indices]  # [n_samples, B, C]
+        sampled_xyz = xyz[:, indices, :]  # [B, n_samples, 3]
         
         return sampled_features, sampled_xyz
     
@@ -101,8 +104,10 @@ class UNetFeatureAdapter(nn.Module):
         if not self.voxel_spacing.is_cuda:
             self.voxel_spacing = self.voxel_spacing.to(device)
         
-        features = self.feature_projection(unet_features) 
-        features = self.spatial_conv(features) 
+        features = self.feature_projection(unet_features)  
+        
+        features = self.spatial_conv(features)  
+        
         xyz = self.generate_voxel_coordinates(features.shape, device, volume_dims)
         
         N_voxels = D * H * W
@@ -114,7 +119,6 @@ class UNetFeatureAdapter(nn.Module):
                 features_flat, xyz, self.max_voxels
             )
         
-
         if volume_dims is not None:
             pos_embed = self.pos_embed_3d(
                 xyz, 
@@ -131,7 +135,7 @@ class UNetFeatureAdapter(nn.Module):
         pos_embed = pos_embed.permute(2, 0, 1)  
         
         if self.pos_embed_learned is not None and features_flat.shape[0] == self.pos_embed_learned.shape[1]:
-            learned_pos = self.pos_embed_learned.permute(1, 0, 2) 
+            learned_pos = self.pos_embed_learned.permute(1, 0, 2)  
             learned_pos = learned_pos.expand(-1, B, -1)  
             pos_embed = pos_embed + learned_pos
         
@@ -139,10 +143,13 @@ class UNetFeatureAdapter(nn.Module):
 
 
 class MultiScaleUNetAdapter(nn.Module):
+    """
+    Handles multi-scale features from UNet (if using FPN/U-Net++)
+    """
     def __init__(self,
-                 unet_channels_list,  
+                 unet_channels_list, 
                  transformer_dim=256,
-                 selected_scale=-1,  
+                 selected_scale=-1, 
                  args=None):
         super().__init__()
         self.selected_scale = selected_scale

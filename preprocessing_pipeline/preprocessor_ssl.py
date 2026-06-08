@@ -3,11 +3,6 @@
 Copyright (c) 2026 | MIT License | https://github.com/shivasmic/3d-trauma-detection-ssl
 """
 
-""" This script creates holdout samples using the same preprocessing protocol for n number of samples which are exclusive 
-to the already created 1206 samples, this is extremely useful in generating more volumes for UNet evaluation or
-generating more volumes for Semi-Supervised training for VDETR
-"""
-
 import os
 import glob
 import pydicom
@@ -29,9 +24,9 @@ CONFIG = {
     "HU_CLIP_RANGE": tuple(map(int, os.getenv("HU_CLIP_RANGE").split(","))),
     "TRAIN_IMAGES_DIR": os.getenv("TRAIN_IMAGES_DIR"),
     "SEGMENTATIONS_DIR": os.getenv("SEGMENTATIONS_DIR"),
-    "OUTPUT_DIR": os.getenv("HOLDOUT_OUTPUT_DIR"),  
-    "EXISTING_DATA_DIR": os.getenv("OUTPUT_DIR"),  
-    "NUM_HOLDOUT_SAMPLES": 250,  
+    "OUTPUT_DIR": os.getenv("SSL_OUTPUT_DIR"),              
+    "EXISTING_DATA_DIR": os.getenv("OUTPUT_DIR"),           
+    "NUM_HOLDOUT_SAMPLES": 2000,
 }
 
 logger = get_preprocessing_logger()
@@ -48,6 +43,7 @@ def load_dicom_series(series_path):
         pixel_spacing = slices[0].PixelSpacing
         slice_thickness = float(slices[0].SliceThickness)
     except AttributeError:
+        logger.warning(f"Missing spacing tags in {series_path}. Using defaults.")
         pixel_spacing = [1.0, 1.0]
         slice_thickness = 1.0
     
@@ -78,11 +74,16 @@ def process_nii_mask(nii_path, series_original_shape, series_resampled_shape):
     nii_mask = nib.load(nii_path)
     mask_data = np.round(nii_mask.get_fdata()).astype(np.uint8)
     
+    logger.debug(f"    Mask loaded shape: {mask_data.shape}")
+    logger.debug(f"    DICOM original shape: {series_original_shape}")
+    
     if mask_data.shape != series_original_shape:
         if mask_data.shape == (series_original_shape[2], series_original_shape[1], series_original_shape[0]):
             mask_data = np.transpose(mask_data, (2, 1, 0))
+            logger.debug(f"    Transposed mask to: {mask_data.shape}")
         elif mask_data.shape == (series_original_shape[1], series_original_shape[2], series_original_shape[0]):
             mask_data = np.transpose(mask_data, (2, 0, 1))
+            logger.debug(f"    Transposed mask to: {mask_data.shape}")
         else:
             logger.warning(f"    WARNING: Mask shape {mask_data.shape} doesn't match DICOM shape {series_original_shape}")
     
@@ -91,6 +92,7 @@ def process_nii_mask(nii_path, series_original_shape, series_resampled_shape):
     mask_aligned = (mask_aligned_float > 0.5).astype(np.uint8)
     final_z, final_y, final_x = series_resampled_shape
     mask_aligned = mask_aligned[:final_z, :final_y, :final_x]
+    logger.debug(f"    Final mask shape after resampling: {mask_aligned.shape}")
     
     return mask_aligned
 
@@ -174,6 +176,7 @@ def size_standardize_with_crop_indices(volume, final_shape, start_indices, is_ma
 
 
 def process_series(series_path, series_id, config):
+    logger.info(f"Processing Series: {series_id}")
     try:
         raw_image, current_spacing = load_dicom_series(series_path)
     except Exception as e:
@@ -181,17 +184,22 @@ def process_series(series_path, series_id, config):
         return
     
     original_shape = raw_image.shape
+    logger.info(f"  Original DICOM shape: {original_shape}")
     
     temp_resampled_volume = resample_and_normalize(raw_image, current_spacing, config)
-    resampled_shape = temp_resampled_volume.shape    
+    resampled_shape = temp_resampled_volume.shape
+    logger.info(f"  Resampled volume shape: {resampled_shape}")
+    
     nii_file = os.path.join(config['SEGMENTATIONS_DIR'], f"{series_id}.nii")
     
     if os.path.exists(nii_file):
         try:
             nii_mask = nib.load(nii_file)
             mask_data_raw = np.round(nii_mask.get_fdata()).astype(np.uint8)
+            logger.info(f"  Original mask shape: {mask_data_raw.shape}, sum: {mask_data_raw.sum()}")
             
             gt_mask_temp = process_nii_mask(nii_file, original_shape, resampled_shape)
+            logger.info(f"  After process_nii_mask shape: {gt_mask_temp.shape}, sum: {gt_mask_temp.sum()}")
             
             labeled_temp = label(gt_mask_temp > 0)
             props_temp = regionprops(labeled_temp)
@@ -237,10 +245,12 @@ def process_series(series_path, series_id, config):
                 gt_mask_temp, config['INPUT_DIMENSIONS'], crop_indices, is_mask=True
             )
             
+            logger.info(f"After size_standardize shape: {gt_mask.shape}, sum: {gt_mask.sum()}")
             
             labeled_mask = label(gt_mask.astype(bool))
             props_all = regionprops(labeled_mask)
             
+            logger.info(f"Number of connected components: {len(props_all)}")
             
             gt_bbox = None
             
@@ -291,7 +301,7 @@ def process_series(series_path, series_id, config):
             os.path.join(config['OUTPUT_DIR'], f"{series_id}_unlabeled.npz"),
             volume=final_volume.astype(np.float32)
         )
-        logger.info(f"Saved Unlabeled Data: {series_id}.npz (No .nii file found)")
+        logger.info(f"  → Saved Unlabeled Data: {series_id}.npz (No .nii file found)")
 
 
 def process_series_wrapper(series_tuple, config):
@@ -301,123 +311,138 @@ def process_series_wrapper(series_tuple, config):
         process_series(series_path, series_id, config)
         elapsed = time.time() - start_time
         label_status = "labeled" if has_label else "unlabeled"
+        logger.info(f"✓ Completed {series_id} ({label_status}) in {elapsed:.2f}s")
     except Exception as e:
-        logger.error(f"Failed {series_id}: {e}")
+        logger.error(f"✗ Failed {series_id}: {e}")
         import traceback
         logger.error(traceback.format_exc())
 
 
 def get_already_processed_series(existing_data_dir):
-    if not os.path.exists(existing_data_dir):
-        logger.warning(f"Existing data directory not found: {existing_data_dir}")
-        return set()
-    
-    processed_files = glob.glob(os.path.join(existing_data_dir, "*.npz"))
+    """
+    Get list of series IDs that have already been processed.
+    Checks BOTH the existing preprocessed_data/ AND the SSL output directory.
+    """
     processed_ids = set()
-    
-    for f in processed_files:
-        basename = os.path.basename(f)
-        if basename.endswith('_labeled.npz'):
-            series_id = basename[:-len('_labeled.npz')]
-        elif basename.endswith('_unlabeled.npz'):
-            series_id = basename[:-len('_unlabeled.npz')]
-        else:
-            series_id = basename[:-4] 
-        
-        processed_ids.add(series_id)
-    
+
+    # Check all directories that might have processed volumes
+    dirs_to_check = [existing_data_dir, CONFIG['OUTPUT_DIR']]
+
+    for check_dir in dirs_to_check:
+        if not os.path.exists(check_dir):
+            logger.warning(f"Directory not found, skipping: {check_dir}")
+            continue
+
+        processed_files = glob.glob(os.path.join(check_dir, "*.npz"))
+
+        for f in processed_files:
+            basename = os.path.basename(f)
+            if basename.endswith('_labeled.npz'):
+                series_id = basename[:-len('_labeled.npz')]
+            elif basename.endswith('_unlabeled.npz'):
+                series_id = basename[:-len('_unlabeled.npz')]
+            else:
+                series_id = basename[:-4]
+
+            processed_ids.add(series_id)
+
+        logger.info(f"Found {len(processed_ids)} processed series in {check_dir}")
+
+    logger.info(f"Total unique already-processed series: {len(processed_ids)}")
     if len(processed_ids) > 0:
         sample_ids = sorted(list(processed_ids))[:10]
         logger.info(f"Sample already processed IDs: {sample_ids}...")
-    
+
     return processed_ids
 
 
 def discover_new_series(config):
+    """
+    Discovers series that have NOT been processed yet.
+    Only picks UNLABELED series for SSL (we don't need labeled ones here).
+    """
+    logger.info("Discovering NEW UNLABELED series for SSL...")
+
     already_processed = get_already_processed_series(config['EXISTING_DATA_DIR'])
-    
+
     segmentation_files = glob.glob(os.path.join(config['SEGMENTATIONS_DIR'], "*.nii"))
     labeled_series_ids = {os.path.splitext(os.path.basename(f))[0] for f in segmentation_files}
-    
-    logger.info(f"Total segmentation masks available: {len(labeled_series_ids)}")
-    
-    new_labeled_series = []
+    logger.info(f"Total labeled series (will skip): {len(labeled_series_ids)}")
+
     new_unlabeled_series = []
-    
+
     for patient_dir in glob.glob(os.path.join(config['TRAIN_IMAGES_DIR'], "*")):
         for series_path in glob.glob(os.path.join(patient_dir, "*")):
             series_id = os.path.basename(series_path)
-            
+
             if series_id in already_processed:
                 continue
-            
-            # Add to appropriate list
+
+            # Skip labeled series (we only want unlabeled for SSL)
             if series_id in labeled_series_ids:
-                new_labeled_series.append((series_path, series_id, True))
-            else:
-                new_unlabeled_series.append((series_path, series_id, False))
-    
-    logger.info(f"NEW series discovered (not yet processed):")
-    logger.info(f"NEW Labeled: {len(new_labeled_series)}")
-    logger.info(f"NEW Unlabeled: {len(new_unlabeled_series)}")
-    logger.info(f"TOTAL NEW: {len(new_labeled_series) + len(new_unlabeled_series)}")
-    
-    return new_labeled_series, new_unlabeled_series
+                continue
+
+            new_unlabeled_series.append((series_path, series_id, False))
+
+    logger.info(f"NEW unlabeled series available for SSL: {len(new_unlabeled_series)}")
+
+    return new_unlabeled_series
 
 
 def run_pipeline():
-    logger.info("HOLDOUT SET PREPROCESSING PIPELINE")
+    """
+    Processes NEW unlabeled series for SSL consistency regularization.
+    Skips any series already processed in preprocessed_data/ or ssl_data/.
+    """
+
+    logger.info("=" * 60)
+    logger.info("SSL UNLABELED VOLUME PREPROCESSING PIPELINE")
+    logger.info("=" * 60)
     logger.info(f"Configuration:")
     for key, value in CONFIG.items():
         logger.info(f"  {key}: {value}")
     logger.info("=" * 60)
-    
+
     if not os.path.exists(CONFIG['OUTPUT_DIR']):
         os.makedirs(CONFIG['OUTPUT_DIR'])
         logger.info(f"Created output directory: {CONFIG['OUTPUT_DIR']}")
-    
-    new_labeled_series, new_unlabeled_series = discover_new_series(CONFIG)
-    
-    all_new_series = new_labeled_series + new_unlabeled_series
-    
-    if len(all_new_series) == 0:
-        logger.error("ERROR: No new series found to process!")
-        logger.error("All series have already been processed.")
+
+    new_unlabeled_series = discover_new_series(CONFIG)
+
+    if len(new_unlabeled_series) == 0:
+        logger.error("ERROR: No new unlabeled series found!")
+        logger.error("All unlabeled series have already been processed.")
         return
-    
-    num_to_process = min(CONFIG['NUM_HOLDOUT_SAMPLES'], len(all_new_series))
-    series_to_process = all_new_series[:num_to_process]
-    
+
+    num_to_process = min(CONFIG['NUM_HOLDOUT_SAMPLES'], len(new_unlabeled_series))
+    series_to_process = new_unlabeled_series[:num_to_process]
+
+   
     logger.info("PROCESSING PLAN:")
-    logger.info(f"Available NEW series: {len(all_new_series)}")
-    logger.info(f"Target holdout samples: {CONFIG['NUM_HOLDOUT_SAMPLES']}")
-    logger.info(f"Will process: {num_to_process} series")
-    logger.info(f"Output directory: {CONFIG['OUTPUT_DIR']}")
-    
+    logger.info(f"  Available NEW unlabeled series: {len(new_unlabeled_series)}")
+    logger.info(f"  Target SSL samples: {CONFIG['NUM_HOLDOUT_SAMPLES']}")
+    logger.info(f"  Output directory: {CONFIG['OUTPUT_DIR']}")
+
     num_workers = int(os.environ.get('SLURM_CPUS_PER_TASK', os.cpu_count() or 4))
     logger.info(f"Using {num_workers} parallel workers")
-    
-    process_func = partial(process_series_wrapper, config=CONFIG)    
+
+    process_func = partial(process_series_wrapper, config=CONFIG)
+
+    logger.info("Starting parallel processing...")
     start_time = time.time()
-    
+
     with Pool(processes=num_workers) as pool:
         pool.map(process_func, series_to_process)
-    
-    elapsed_time = time.time() - start_time
-    
-    logger.info("HOLDOUT PREPROCESSING COMPLETED!")
-    logger.info(f"Total time: {elapsed_time/60:.2f} minutes ({elapsed_time:.2f}s)")
-    logger.info(f"Average time per series: {elapsed_time/len(series_to_process):.2f}s")
-    logger.info(f"Processed {len(series_to_process)} NEW series")
-    logger.info(f"Output directory: {CONFIG['OUTPUT_DIR']}")
-    
-    labeled_processed = sum(1 for _, _, is_labeled in series_to_process if is_labeled)
-    unlabeled_processed = len(series_to_process) - labeled_processed
-    logger.info("SUMMARY:")
-    logger.info(f"  - Labeled holdout: {labeled_processed}")
-    logger.info(f"  - Unlabeled holdout: {unlabeled_processed}")
-    logger.info(f"  - Total holdout: {len(series_to_process)}")
 
+    elapsed_time = time.time() - start_time
+
+    # Final count of what actually got saved
+    saved_files = glob.glob(os.path.join(CONFIG['OUTPUT_DIR'], "*_unlabeled.npz"))
+
+    logger.info("SSL PREPROCESSING COMPLETED!")
+    logger.info(f"Total time: {elapsed_time/60:.2f} minutes ({elapsed_time:.2f}s)")
+    logger.info(f"Successfully saved: {len(saved_files)} unlabeled volumes")
+    logger.info(f"Output directory: {CONFIG['OUTPUT_DIR']}")
 
 if __name__ == '__main__':
     run_pipeline()
