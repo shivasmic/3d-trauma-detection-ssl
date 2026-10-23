@@ -1,10 +1,10 @@
-# 3D Abdominal Trauma Detection with Self-Supervised Learning
+# 3D Abdominal Trauma Detection with Self-Supervised Learning using Vertex Relative Position Encoding in Detection Transformers
 
-Official implementation of "Addressing Data Scarcity in 3D Trauma Detection through Self-Supervised and Semi-Supervised Learning with Vertex Relative Position Encoding".
+Official implementation of "CT-VDETR: Semi-supervised 3D Trauma Detection in Computed Tomography (CT) scans using Dense Vertex Relative Position Encoding".
 
 **Authors:** Shivam Chaudhary, Sheethal Bhat, Andreas Maier  
 **Affiliation:** Pattern Recognition Lab, Friedrich-Alexander-Universität Erlangen-Nürnberg  
-**Paper:** arXiv (Coming Soon)
+**Paper:** [arXiv](https://arxiv.org/pdf/2603.12514)
 
 ## Method Overview
 
@@ -13,7 +13,7 @@ Official implementation of "Addressing Data Scarcity in 3D Trauma Detection thro
 Our pipeline consists of three stages:
 
 1. Self-Supervised Pre-training: 3D U-Net encoder trained on 1,000 unlabeled CT volumes using masked patch reconstruction (75% masking ratio)
-2. Semi-Supervised Detection: VDETR with 3D Vertex Relative Position Encoding trained with consistency regularization on 2,000 unlabeled volumes
+2. Semi-Supervised Detection: CT-VDETR with 3D Vertex Relative Position Encoding trained with consistency regularization on 2,000 unlabeled volumes
 3. Injury Classification: Frozen encoder fine-tuned for multi-label injury classification
 
 ## Model Weights
@@ -23,17 +23,17 @@ Pre-trained weights are hosted on Google Drive:
 | Model | Description | Size | Download |
 |-------|-------------|------|----------|
 | 3D U-Net Encoder | Self-supervised MIM pre-training (liver) | 22 MB | [Google Drive](https://drive.google.com/drive/folders/1nQ68k1njgwCOcT-xzH4gBGsrL9d_Wsi7?usp=drive_link) |
-| CT-VDETR (Semi-Supervised) | Liver detector trained with consistency regularization | 197 MB | [Google Drive](https://drive.google.com/drive/folders/1nQ68k1njgwCOcT-xzH4gBGsrL9d_Wsi7?usp=drive_link) |
+| CT-VDETR (Semi-Supervised) | CT-VDETR detector trained with consistency regularization | 197 MB | [Google Drive](https://drive.google.com/drive/folders/1nQ68k1njgwCOcT-xzH4gBGsrL9d_Wsi7?usp=drive_link) |
 
 After downloading, place the files as follows:
 
 ```
 3d-trauma-detection-ssl/
-├── unet_liver_encoder_ckpt/
-│   └── 3D_unet_liver_ssl_weights.pth
+├── unet_encoder_ckpt/
+│   └── 3D_unet_model.pth
 └── detector/
     └── checkpoints/
-        └── best_model.pth
+        └── vdetr_model.pth
 ```
 
 Paths are set in `detector/configs/config.yaml` (`unet_checkpoint`) and in `detector/test_vdetr.sh` (`BEST_CHECKPOINT`). Adjust them if you store the weights elsewhere.
