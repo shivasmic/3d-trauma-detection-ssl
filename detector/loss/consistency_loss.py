@@ -1,97 +1,64 @@
 """
-3D Trauma Detection | Authors: Shivam Chaudhary, Sheethal Bhat, Andreas Maier | FAU Erlangen-Nürnberg
-Copyright (c) 2026 | MIT License | https://github.com/shivasmic/3d-trauma-detection-ssl
+Consistency loss for semi-supervised CT-VDETR training.
+Teacher = same network on the weak view (torch.no_grad()); student = same network on the strong view.
+Returns the RAW loss. lambda(t) is applied ONCE in main.py via get_consistency_weight().
 """
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+_SCENE_SIZE_MM = (1024.0, 336.0, 336.0)
+
 
 class ConsistencyLoss(nn.Module):
-    def __init__(self,
-                 center_weight=1.0,
-                 size_weight=1.0,
-                 cls_weight=1.0,
-                 temperature=1.0,
-                 start_epoch=0,           
-                 warmup_epochs=10,        
-                 max_weight=1.0):         
-
+    def __init__(self, center_weight=1.0, size_weight=1.0, cls_weight=1.0,
+                 temperature=2.0, **unused):  # old start_epoch/warmup_epochs/max_weight kwargs are ignored
         super().__init__()
         self.center_weight = center_weight
         self.size_weight = size_weight
         self.cls_weight = cls_weight
         self.temperature = temperature
-        
-        self.start_epoch = start_epoch
-        self.warmup_epochs = warmup_epochs
-        self.max_weight = max_weight
+        self.register_buffer("scene_size", torch.tensor(_SCENE_SIZE_MM), persistent=False)
 
-    def forward(self, weak_outputs, strong_outputs, epoch=0):  
-      
-        
-        if epoch < self.start_epoch:
-            device = list(weak_outputs['outputs'].values())[0].device
-            return torch.tensor(0.0, device=device), {
-                'loss_consistency': 0.0,
-                'loss_consistency_center': 0.0,
-                'loss_consistency_size': 0.0,
-                'loss_consistency_cls': 0.0,
-                'ssl_weight': 0.0,
-            }
-        
-        warmup_progress = min(1.0, (epoch - self.start_epoch) / self.warmup_epochs)
-        ssl_weight = self.max_weight * warmup_progress
-        
-        weak_pred = weak_outputs['outputs']
-        strong_pred = strong_outputs['outputs']
+    def _normalized(self, pred, key):
+        if f"{key}_normalized" in pred:
+            return pred[f"{key}_normalized"]
+        x = pred[f"{key}_unnormalized"]
+        return x / self.scene_size.to(x.device)
 
-        weak_center = weak_pred['center_unnormalized']
-        strong_center = strong_pred['center_unnormalized']
-        loss_center = F.mse_loss(strong_center, weak_center.detach())
+    def forward(self, weak_outputs, strong_outputs, epoch=None):
+        weak_pred = weak_outputs["outputs"]
+        strong_pred = strong_outputs["outputs"]
+        T = self.temperature
 
-        weak_size = weak_pred['size_unnormalized']
-        strong_size = strong_pred['size_unnormalized']
-        loss_size = F.mse_loss(strong_size, weak_size.detach())
+        loss_center = F.l1_loss(self._normalized(strong_pred, "center"),
+                                self._normalized(weak_pred, "center").detach())
+        loss_size = F.l1_loss(self._normalized(strong_pred, "size"),
+                              self._normalized(weak_pred, "size").detach())
 
-        if 'sem_cls_logits' in weak_pred:
-            weak_logits = weak_pred['sem_cls_logits']       
-            strong_logits = strong_pred['sem_cls_logits']
+        key = "sem_cls_logits" if "sem_cls_logits" in weak_pred else "sem_cls_prob"
+        weak_logits = weak_pred[key].detach()
+        strong_logits = strong_pred[key]
+        if strong_logits.shape[-1] == 1:
+            target = torch.sigmoid(weak_logits / T)
+            loss_cls = F.binary_cross_entropy_with_logits(strong_logits / T, target) * (T ** 2)
         else:
-            weak_logits = weak_pred['sem_cls_prob']
-            strong_logits = strong_pred['sem_cls_prob']
+            weak_soft = F.softmax(weak_logits / T, dim=-1)
+            strong_log_soft = F.log_softmax(strong_logits / T, dim=-1)
+            loss_cls = F.kl_div(strong_log_soft, weak_soft, reduction="none").sum(-1).mean() * (T ** 2)
 
-        weak_soft = F.softmax(weak_logits.detach() / self.temperature, dim=-1)
-        strong_log_soft = F.log_softmax(strong_logits / self.temperature, dim=-1)
-
-        loss_cls = F.kl_div(
-            strong_log_soft,
-            weak_soft,
-            reduction='batchmean'
-        ) * (self.temperature ** 2)  # Rescale by T^2 as per Hinton et al.
-
-        total_loss = ssl_weight * (
-            self.center_weight * loss_center +
-            self.size_weight  * loss_size +
-            self.cls_weight   * loss_cls
-        )
-
-        loss_detail = {
-            'loss_consistency':        total_loss.item(),
-            'loss_consistency_center': loss_center.item(),
-            'loss_consistency_size':   loss_size.item(),
-            'loss_consistency_cls':    loss_cls.item(),
-            'ssl_weight':              ssl_weight,  
+        total_loss = (self.center_weight * loss_center +
+                      self.size_weight * loss_size +
+                      self.cls_weight * loss_cls)
+        return total_loss, {
+            "loss_consistency": total_loss.item(),
+            "loss_consistency_center": loss_center.item(),
+            "loss_consistency_size": loss_size.item(),
+            "loss_consistency_cls": loss_cls.item(),
         }
 
-        return total_loss, loss_detail
 
-
-
-def get_consistency_weight(epoch, warmup_epochs=10, max_weight=1.0, start_epoch=0):
+def get_consistency_weight(epoch, start_epoch=0, warmup_epochs=10, max_weight=1.0):
     if epoch < start_epoch:
         return 0.0
-    
-    progress = min(1.0, (epoch - start_epoch) / warmup_epochs)
-    return max_weight * progress
+    return max_weight * min(1.0, (epoch - start_epoch) / max(warmup_epochs, 1))

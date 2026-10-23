@@ -10,7 +10,7 @@
 # DATASET CONFIGURATION
 # ============================================================================
 dataset:
-  data_dir: "../preprocessed_data"
+  data_dir: "../preprocessed_liver_train"
   dataset_num_workers: 4
   batchsize_per_gpu: 2
 

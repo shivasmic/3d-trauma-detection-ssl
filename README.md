@@ -16,6 +16,28 @@ Our pipeline consists of three stages:
 2. Semi-Supervised Detection: VDETR with 3D Vertex Relative Position Encoding trained with consistency regularization on 2,000 unlabeled volumes
 3. Injury Classification: Frozen encoder fine-tuned for multi-label injury classification
 
+## Model Weights
+
+Pre-trained weights are hosted on Google Drive:
+
+| Model | Description | Size | Download |
+|-------|-------------|------|----------|
+| 3D U-Net Encoder | Self-supervised MIM pre-training (liver) | 22 MB | [Google Drive](https://drive.google.com/drive/folders/1nQ68k1njgwCOcT-xzH4gBGsrL9d_Wsi7?usp=drive_link) |
+| CT-VDETR (Semi-Supervised) | Liver detector trained with consistency regularization | 197 MB | [Google Drive](https://drive.google.com/drive/folders/1nQ68k1njgwCOcT-xzH4gBGsrL9d_Wsi7?usp=drive_link) |
+
+After downloading, place the files as follows:
+
+```
+3d-trauma-detection-ssl/
+├── unet_liver_encoder_ckpt/
+│   └── 3D_unet_liver_ssl_weights.pth
+└── detector/
+    └── checkpoints/
+        └── best_model.pth
+```
+
+Paths are set in `detector/configs/config.yaml` (`unet_checkpoint`) and in `detector/test_vdetr.sh` (`BEST_CHECKPOINT`). Adjust them if you store the weights elsewhere.
+
 ## Citation
 
 If you find this work useful, please cite:

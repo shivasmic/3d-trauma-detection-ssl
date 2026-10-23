@@ -1,2 +1,4 @@
 *.pth
 detector/checkpoints/
+.DS_Store
+*.pth
